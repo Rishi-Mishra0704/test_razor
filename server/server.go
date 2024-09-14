@@ -1,0 +1,132 @@
+package server
+
+import (
+	"net/http"
+
+	"github.com/TheRSTech/test_razor/models"
+	"github.com/TheRSTech/test_razor/views"
+	"github.com/labstack/echo/v4"
+	"github.com/razorpay/razorpay-go"
+)
+
+type Server struct {
+	razor  *razorpay.Client
+	router *echo.Echo
+}
+
+func NewServer(client razorpay.Client) *Server {
+	server := &Server{
+		razor: &client,
+	}
+	server.setupRouter()
+	return server
+}
+func (server *Server) setupRouter() {
+
+	e := echo.New()
+
+	// API routes
+	e.POST("/api/connect-account", server.ConnectAccount)
+	e.POST("/api/make-payment", server.MakePayment)
+	e.GET("/api/transactions", server.GetTransactions)
+
+	// Serve the index page
+	e.GET("/", func(c echo.Context) error {
+		return render(c, views.Index())
+	})
+
+	server.router = e
+}
+
+func (server *Server) Start(address string) error {
+	return server.router.Start(address)
+}
+
+func (s *Server) ConnectAccount(c echo.Context) error {
+	var req models.AccountRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body"})
+	}
+
+	contactData := models.ContactData{
+		Name:  req.Name,
+		Email: req.Email,
+		Type:  req.AccountType,
+		Contact: models.ContactInfo{
+			Name:  req.Name,
+			Email: req.Email,
+			Phone: req.Phone,
+		},
+	}
+
+	contact, err := s.razor.Customer.Create(contactData.ToMap(), nil)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to create contact: " + err.Error()})
+	}
+
+	fundAccountData := models.FundAccountData{
+		ContactID:   contact["id"].(string),
+		AccountType: "bank_account",
+		BankAccount: models.BankAccountInfo{
+			Name:          req.AccountHolderName,
+			IFSC:          req.IFSCCode,
+			AccountNumber: req.AccountNumber,
+		},
+	}
+
+	fundAccount, err := s.razor.FundAccount.Create(fundAccountData.ToMap(), nil)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to create fund account: " + err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, models.AccountResponse{
+		Contact:     contact,
+		FundAccount: fundAccount,
+	})
+}
+
+func (s *Server) MakePayment(c echo.Context) error {
+	var req models.PaymentRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body"})
+	}
+
+	payoutData := models.PayoutData{
+		AccountNumber: req.FromAccountID,
+		FundAccountID: req.ToAccountID,
+		Amount:        req.Amount,
+		Currency:      req.Currency,
+		Mode:          "IMPS",
+		Purpose:       "payout",
+	}
+
+	payout, err := s.razor.Order.Create(payoutData.ToMap(), nil)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to create payout: " + err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, payout)
+}
+
+func (s *Server) GetTransactions(c echo.Context) error {
+	accountID := c.QueryParam("account_id")
+	if accountID == "" {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "account_id is required"})
+	}
+
+	from := c.QueryParam("from")
+	to := c.QueryParam("to")
+
+	options := models.TransactionOptions{
+		AccountID: accountID,
+		From:      from,
+		To:        to,
+	}
+
+	transactions, err := s.razor.Customer.All(options.ToMap(), nil)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to fetch transactions: " + err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, transactions)
+}
