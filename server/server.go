@@ -4,7 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"io/ioutil"
+	"io"
 	"net/http"
 
 	"github.com/TheRSTech/test_razor/models"
@@ -141,7 +141,7 @@ func (s *Server) GetTransactions(c echo.Context) error {
 
 // HandleWebhook handles incoming Razorpay webhook events
 func (s *Server) HandleWebhook(c echo.Context) error {
-	body, err := ioutil.ReadAll(c.Request().Body)
+	body, err := io.ReadAll(c.Request().Body)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to read request body"})
 	}
